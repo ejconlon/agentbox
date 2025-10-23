@@ -12,41 +12,13 @@ if [ -s "$HOME/.nvm/nvm.sh" ]; then
     source "$NVM_DIR/nvm.sh"
 fi
 
-# Source SDKMAN if available
-if [ -f "$HOME/.sdkman/bin/sdkman-init.sh" ]; then
-    source "$HOME/.sdkman/bin/sdkman-init.sh"
-fi
-
 # Create Python virtual environment if it doesn't exist in the project
-if [ ! -d "/workspace/.venv" ] && [ -f "/workspace/requirements.txt" -o -f "/workspace/pyproject.toml" -o -f "/workspace/setup.py" ]; then
+if [ ! -d "${VIRTUAL_ENV}" ] && [ -f "/workspace/requirements.txt" -o -f "/workspace/pyproject.toml" -o -f "/workspace/setup.py" ]; then
     echo "🐍 Python project detected, creating virtual environment..."
     cd /workspace
-    uv venv .venv
-    echo "✅ Virtual environment created at .venv/"
-    echo "   Activate with: source .venv/bin/activate"
-fi
-
-# Set proper permissions on mounted SSH directory if it exists
-if [ -d "/home/claude/.ssh" ]; then
-    # Ensure correct permissions for SSH directory and files
-    chmod 700 /home/claude/.ssh 2>/dev/null || true
-    chmod 600 /home/claude/.ssh/* 2>/dev/null || true
-    chmod 644 /home/claude/.ssh/*.pub 2>/dev/null || true
-    chmod 644 /home/claude/.ssh/authorized_keys 2>/dev/null || true
-    chmod 644 /home/claude/.ssh/known_hosts 2>/dev/null || true
-    echo "✅ SSH directory permissions configured"
-fi
-
-# Ensure git config is set (for commits inside container)
-if [ -z "$(git config --global user.email)" ]; then
-    # Try to copy from mounted .gitconfig if available
-    if [ -f "/home/claude/.gitconfig" ]; then
-        git config --global user.email "$(git config --file /home/claude/.gitconfig user.email 2>/dev/null || echo 'claude@agentbox')"
-        git config --global user.name "$(git config --file /home/claude/.gitconfig user.name 2>/dev/null || echo 'Claude (AgentBox)')"
-    else
-        git config --global user.email "claude@agentbox"
-        git config --global user.name "Claude (AgentBox)"
-    fi
+    mkdir -p $(dirname ${VIRTUAL_ENV})
+    uv sync --all-packages
+    echo "✅ Virtual environment created at ${VIRTUAL_ENV}"
 fi
 
 # Set terminal for better experience
@@ -65,7 +37,6 @@ if [ -t 0 ] && [ -t 1 ]; then
     echo "📁 Workspace: /workspace"
     echo "🐍 Python: $(python3 --version 2>&1 | cut -d' ' -f2) (uv available)"
     echo "🟢 Node.js: $(node --version 2>/dev/null || echo 'not found')"
-    echo "☕ Java: $(java -version 2>&1 | head -1 | cut -d'"' -f2 || echo 'not found')"
     echo "🤖 Claude CLI: $(claude --version 2>/dev/null || echo 'not found - check installation')"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""

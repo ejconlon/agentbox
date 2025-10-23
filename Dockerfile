@@ -1,5 +1,5 @@
 # AgentBox - Simplified multi-language development environment for Claude
-FROM debian:bookworm
+FROM debian:trixie
 
 # Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -33,8 +33,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         # Python build dependencies
         python3-dev python3-pip python3-venv \
         libssl-dev libffi-dev \
-        # Java dependencies
-        default-jdk maven gradle \
+        # Custom tools
+        just \
         # Search tools
         ripgrep fd-find && \
     # Setup locale
@@ -55,20 +55,10 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install GitLab CLI
-RUN ARCH=$(dpkg --print-architecture) && \
-    GLAB_VERSION=$(curl -sL "https://gitlab.com/api/v4/projects/34675721/releases/permalink/latest" | sed -n 's/.*"tag_name":"v\?\([^"]*\)".*/\1/p') && \
-    echo "Installing glab version ${GLAB_VERSION} for ${ARCH}" && \
-    curl -fsSL -o /tmp/glab.deb \
-        "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${ARCH}.deb" && \
-    dpkg -i /tmp/glab.deb || apt-get install -f -y && \
-    rm /tmp/glab.deb && \
-    glab --version
-
 # Create non-root user
 ARG USER_ID=1000
 ARG GROUP_ID=1000
-ARG USERNAME=claude
+ARG USERNAME=agentbox
 
 RUN groupadd -g ${GROUP_ID} ${USERNAME} || true && \
     useradd -m -u ${USER_ID} -g ${GROUP_ID} -s /bin/zsh ${USERNAME} && \
@@ -100,34 +90,9 @@ RUN echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc && \
 # Install Node.js global packages
 RUN bash -c "source $NVM_DIR/nvm.sh && \
     npm install -g \
-        typescript \
-        @types/node \
-        ts-node \
-        eslint \
-        prettier \
-        nodemon \
-        yarn \
-        pnpm \
         @anthropic-ai/claude-code && \
     # Verify Claude CLI installation
     which claude && claude --version"
-
-# Install SDKMAN for Java toolchain management
-RUN curl -s "https://get.sdkman.io?rcupdate=false" | bash && \
-    echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> ~/.bashrc && \
-    echo 'source "$HOME/.sdkman/bin/sdkman-init.sh"' >> ~/.zshrc && \
-    bash -c "source $HOME/.sdkman/bin/sdkman-init.sh && \
-        sdk install java 21.0.8-tem && \
-        sdk install gradle"
-
-# Setup Python tools
-RUN /home/${USERNAME}/.local/bin/uv tool install black && \
-    /home/${USERNAME}/.local/bin/uv tool install ruff && \
-    /home/${USERNAME}/.local/bin/uv tool install mypy && \
-    /home/${USERNAME}/.local/bin/uv tool install pytest && \
-    /home/${USERNAME}/.local/bin/uv tool install ipython && \
-    /home/${USERNAME}/.local/bin/uv tool install poetry && \
-    /home/${USERNAME}/.local/bin/uv tool install pipenv
 
 # Install oh-my-zsh for better shell experience and setup NVM for zsh
 RUN sh -c "$(wget -O- https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended && \
@@ -185,6 +150,9 @@ EOF
 
 # Create workspace directory
 RUN mkdir -p /home/${USERNAME}/workspace
+
+# Fix cache for uv
+RUN mkdir -p /home/${USERNAME}/.cache && chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.cache
 
 # Switch back to root for entrypoint setup
 USER root

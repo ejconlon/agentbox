@@ -5,13 +5,14 @@
 set -euo pipefail
 
 # Configuration
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR="/opt/agentbox"
 readonly PROJECT_DIR="$(pwd)"
 readonly PROJECT_NAME="$(basename "$PROJECT_DIR")"
 readonly DOCKERFILE_PATH="${SCRIPT_DIR}/Dockerfile"
 readonly ENTRYPOINT_PATH="${SCRIPT_DIR}/entrypoint.sh"
 readonly IMAGE_NAME="agentbox:latest"
 readonly CONTAINER_PREFIX="agentbox"
+readonly USERNAME="agentbox"
 
 # Colors for output
 readonly RED='\033[0;31m'
@@ -98,7 +99,7 @@ build_image() {
     if docker build \
         --build-arg USER_ID="${user_id}" \
         --build-arg GROUP_ID="${group_id}" \
-        --build-arg USERNAME="claude" \
+        --build-arg USERNAME="${USERNAME}" \
         --label "agentbox.hash=${combined_hash}" \
         --label "agentbox.version=1.0.0" \
         --label "agentbox.built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -180,42 +181,8 @@ run_container() {
 
     # Mount .gitconfig if it exists
     if [[ -f "${HOME}/.gitconfig" ]]; then
-        mount_opts+=(-v "${HOME}/.gitconfig:/home/claude/.gitconfig:ro")
+        mount_opts+=(-v "${HOME}/.gitconfig:/home/${USERNAME}/.gitconfig:ro")
     fi
-
-    # Mount dedicated AgentBox SSH directory
-    local agentbox_ssh="${HOME}/.agentbox/ssh"
-    if [[ -d "${agentbox_ssh}" ]]; then
-        mount_opts+=(-v "${agentbox_ssh}:/home/claude/.ssh:rw")
-        log_info "AgentBox SSH directory mounted (read-write)"
-    else
-        log_warning "SSH not configured. Run 'agentbox ssh-init' to enable SSH operations."
-    fi
-
-    # Mount cache directories for package managers
-    local cache_dir="${HOME}/.cache/agentbox/${container_name}"
-    mkdir -p "${cache_dir}/npm" "${cache_dir}/pip" "${cache_dir}/maven" "${cache_dir}/gradle"
-
-    mount_opts+=(
-        -v "${cache_dir}/npm:/home/claude/.npm"
-        -v "${cache_dir}/pip:/home/claude/.cache/pip"
-        -v "${cache_dir}/maven:/home/claude/.m2"
-        -v "${cache_dir}/gradle:/home/claude/.gradle"
-    )
-
-    # Mount per-project persistent data
-    local project_data_dir="${HOME}/.agentbox/projects/${container_name}"
-    local history_dir="${project_data_dir}/history"
-    mkdir -p "${history_dir}"
-
-    # Create history files if they don't exist
-    touch "${history_dir}/zsh_history"
-    touch "${history_dir}/bash_history"
-
-    mount_opts+=(
-        -v "${history_dir}/zsh_history:/home/claude/.zsh_history"
-        -v "${history_dir}/bash_history:/home/claude/.bash_history"
-    )
 
     # Use Docker named volume for Claude config (like Anthropic's devcontainer)
     local claude_volume_name="agentbox-claude-${container_name#agentbox-}"
@@ -236,10 +203,10 @@ run_container() {
         fi
     fi
 
-    mount_opts+=(-v "${claude_volume_name}:/home/claude/.claude")
+    mount_opts+=(-v "${claude_volume_name}:/home/${USERNAME}/.claude")
 
     # Set Claude config directory environment variable
-    mount_opts+=(--env "CLAUDE_CONFIG_DIR=/home/claude/.claude")
+    mount_opts+=(--env "CLAUDE_CONFIG_DIR=/home/${USERNAME}/.claude")
 
     log_info "Claude CLI configuration mounted"
 
@@ -272,6 +239,13 @@ run_container() {
     docker run -it --rm \
         --name "$container_name" \
         --hostname "agentbox-$PROJECT_NAME" \
+        --env "USER=${USERNAME}" \
+        --env "VIRTUAL_ENV=/workspace/.agentbox/venv" \
+        --env "UV_PROJECT_ENVIRONMENT=/workspace/.agentbox/venv" \
+        --env "UV_CACHE_DIR=/workspace/.agentbox/cache" \
+        --env "UV_PYTHON_CACHE_DIR=/workspace/.agentbox/pycache" \
+        --env "UV_PYTHON_INSTALL_DIR=/workspace/.agentbox/pyinst" \
+        --env "UV_TOOL_DIR=/workspace/.agentbox/pytool" \
         "${mount_opts[@]}" \
         "${env_file_args[@]}" \
         -w /workspace \
@@ -290,12 +264,11 @@ Usage:
 
 Options:
     -h, --help      Show this help message
-    --cleanup       Remove AgentBox image and cached data
+    --cleanup       Remove AgentBox image
     --rebuild       Force rebuild of the image
 
 Commands:
     shell [--admin] Start interactive shell instead of Claude CLI
-    ssh-init        Initialize SSH directory for AgentBox
 
     If no command is provided, Claude CLI will be started automatically.
     Use 'shell' command to get a shell instead of Claude CLI.
@@ -309,7 +282,6 @@ Examples:
     agentbox python script.py   # Run Python script in container
     agentbox --cleanup          # Remove image and optionally cached data
     agentbox --rebuild          # Force rebuild image
-    agentbox ssh-init           # Set up SSH for AgentBox
 
 Containers are ephemeral and automatically removed when you exit.
 Package caches and shell history persist between sessions.
@@ -326,59 +298,19 @@ cleanup_all() {
         docker rmi "$IMAGE_NAME" &> /dev/null || true
     fi
 
-    # Remove cached data (optional - ask user)
-    local cache_base="${HOME}/.cache/agentbox"
-    local project_base="${HOME}/.agentbox/projects"
-
-    if [[ -d "$cache_base" ]] || [[ -d "$project_base" ]]; then
-        log_warning "This will also remove cached packages and shell history."
-        echo -n "Remove cached data? (y/N): "
-        read -r response
-        if [[ "$response" =~ ^[Yy]$ ]]; then
-            [[ -d "$cache_base" ]] && rm -rf "$cache_base"
-            [[ -d "$project_base" ]] && rm -rf "$project_base"
-            log_success "Cached data removed"
-        else
-            log_info "Cached data preserved"
-        fi
+    if [[ -d ".agentbox" ]]; then
+      log_warning "This will also remove cached data."
+      echo -n "Remove cached data? (y/N): "
+      read -r response
+      if [[ "$response" =~ ^[Yy]$ ]]; then
+          rm -rf .agentbox
+          log_success "Cached data removed"
+      else
+          log_info "Cached data preserved"
+      fi
     fi
 
     log_success "Cleanup complete"
-}
-
-# Set up dedicated SSH directory for AgentBox
-ssh_setup() {
-    local agentbox_ssh="${HOME}/.agentbox/ssh"
-
-    log_info "Setting up AgentBox SSH directory..."
-    mkdir -p "${agentbox_ssh}"
-    chmod 700 "${agentbox_ssh}"
-
-
-    # Copy known_hosts if it exists
-    if [[ -f "${HOME}/.ssh/known_hosts" ]]; then
-        cp "${HOME}/.ssh/known_hosts" "${agentbox_ssh}/known_hosts"
-        chmod 600 "${agentbox_ssh}/known_hosts"
-        log_success "Copied known_hosts from ~/.ssh"
-    fi
-
-    # Check if AgentBox key already exists
-    if [[ -f "${agentbox_ssh}/id_ed25519" ]]; then
-        log_info "AgentBox SSH key already exists"
-    else
-        log_info "Generating dedicated SSH key for AgentBox..."
-        ssh-keygen -t ed25519 -f "${agentbox_ssh}/id_ed25519" -C "agentbox@$(hostname)" -N ""
-        log_success "Generated new SSH key: ${agentbox_ssh}/id_ed25519"
-        echo ""
-        log_info "Add this public key to your Git provider:"
-        echo ""
-        cat "${agentbox_ssh}/id_ed25519.pub"
-        echo ""
-        log_info "Alternatively, replace the keys in ${agentbox_ssh}/ with your desired keys"
-    fi
-
-    log_success "SSH setup complete! Directory: ${agentbox_ssh}"
-    log_info "AgentBox will use this directory for all SSH operations."
 }
 
 # Main execution
@@ -415,10 +347,6 @@ main() {
                 # Remaining args become shell commands
                 cmd_args=("$@")
                 break
-                ;;
-            ssh-init)
-                ssh_setup
-                exit 0
                 ;;
             *)
                 cmd_args+=("$1")
