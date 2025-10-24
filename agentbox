@@ -181,10 +181,17 @@ run_container() {
           log_info "Creating Claude CLI volume and copying authentication from global config"
           docker volume create "$claude_volume_name" &>/dev/null
 
+          # Change permissions on volume
+          docker run --rm \
+            -v "${codex_volume_name}:/dest" \
+            "$IMAGE_NAME" \
+            bash -c 'sudo chown 1000:1000 /dest'
+
           # Initialize volume with global Claude config if it exists
           if [[ -d "${HOME}/.claude" ]]; then
               # Use a temporary container to copy data to the volume
               docker run --rm \
+                  --user 1000:1000 \
                   -v "${HOME}/.claude:/source:ro" \
                   -v "${claude_volume_name}:/dest" \
                   "$IMAGE_NAME" \
@@ -209,14 +216,21 @@ run_container() {
           log_info "Creating codex CLI volume and copying authentication from global config"
           docker volume create "$codex_volume_name" &>/dev/null
 
+          # Change permissions on volume
+          docker run --rm \
+            -v "${codex_volume_name}:/dest" \
+            "$IMAGE_NAME" \
+            sh -c 'sudo chown 1000:1000 /dest'
+
           # Initialize volume with global codex config if it exists
           if [[ -d "${HOME}/.codex" ]]; then
               # Use a temporary container to copy data to the volume
               docker run --rm \
+                  --user 1000:1000 \
                   -v "${HOME}/.codex:/source:ro" \
                   -v "${codex_volume_name}:/dest" \
                   "$IMAGE_NAME" \
-                  sh -c "cp -r /source/* /dest/ 2>/dev/null || true"
+                  sh -c 'cp -r /source/* /dest/ || true'
           fi
       fi
 
@@ -264,6 +278,7 @@ run_container() {
 
     # Run ephemeral container with --rm
     docker run -it --rm \
+        --user 1000:1000 \
         --name "$container_name" \
         --hostname "agentbox-$PROJECT_NAME" \
         --env "USER=${USERNAME}" \
