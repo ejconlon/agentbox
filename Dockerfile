@@ -1,4 +1,4 @@
-# AgentBox - Simplified multi-language development environment for Claude
+# AgentBox - Simplified multi-language development environment for Claude/Codex
 FROM debian:trixie
 
 # Prevent interactive prompts during installation
@@ -82,25 +82,20 @@ RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | b
     nvm alias default node && \
     nvm use default
 
-# Setup NVM in bash only (zsh will be set up after oh-my-zsh)
-RUN echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc && \
-    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.bashrc && \
-    echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> ~/.bashrc
-
-# Install Node.js global packages
+# Install claude and codex
 RUN bash -c "source $NVM_DIR/nvm.sh && \
-    npm install -g \
-        @anthropic-ai/claude-code && \
-    # Verify Claude CLI installation
-    which claude && claude --version"
+    npm install -g @openai/codex @anthropic-ai/claude-code && \
+    which claude && which codex && \
+    mkdir /home/${USERNAME}/.claude && \
+    mkdir /home/${USERNAME}/.codex"
 
-# Install oh-my-zsh for better shell experience and setup NVM for zsh
-RUN sh -c "$(wget -O- https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended && \
-    sed -i 's/ZSH_THEME=".*"/ZSH_THEME="robbyrussell"/' ~/.zshrc && \
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && \
-    echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.zshrc && \
-    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.zshrc && \
-    echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> ~/.zshrc
+# Setup NVM in bash
+RUN echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc && \
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.bashrc
+
+# Setup NVM in zsh
+RUN echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.zshrc && \
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.zshrc
 
 # Add terminal size handling for better TTY support (from ClaudeBox)
 RUN cat >> ~/.zshrc <<'EOF'
@@ -116,43 +111,8 @@ if [[ -n "$PS1" ]] && command -v stty >/dev/null; then
 fi
 EOF
 
-# Configure git
-RUN git config --global init.defaultBranch main && \
-    git config --global pull.rebase false
-
-# Setup tmux configuration
-RUN cat > ~/.tmux.conf <<'EOF'
-# Enable mouse support
-set -g mouse on
-
-# Better colors
-set -g default-terminal "screen-256color"
-set -ga terminal-overrides ",xterm-256color:Tc"
-
-# Increase history
-set -g history-limit 50000
-
-# Better window/pane management
-bind | split-window -h
-bind - split-window -v
-unbind '"'
-unbind %
-
-# Reload config
-bind r source-file ~/.tmux.conf \; display-message "Config reloaded!"
-
-# Status bar
-set -g status-bg black
-set -g status-fg white
-set -g status-left '#[fg=green]#H '
-set -g status-right '#[fg=yellow]%Y-%m-%d %H:%M'
-EOF
-
 # Create workspace directory
 RUN mkdir -p /home/${USERNAME}/workspace
-
-# Fix cache for uv
-RUN mkdir -p /home/${USERNAME}/.cache && chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.cache
 
 # Switch back to root for entrypoint setup
 USER root

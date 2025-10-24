@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AgentBox - Simplified Docker environment for Claude development
+# AgentBox - Simplified Docker environment for Claude/Codex development
 # Automatically rebuilds when Dockerfile changes and uses ephemeral containers with persistent caches
 
 set -euo pipefail
@@ -152,23 +152,11 @@ cleanup_old_containers() {
 run_container() {
     local container_name="$1"
     shift
-
-    # Check if first arg is "shell" mode
-    local shell_mode=false
-    local admin_mode=false
-    if [[ "${1:-}" == "shell" ]]; then
-        shell_mode=true
-        shift
-        # Check if next arg is --admin
-        if [[ "${1:-}" == "--admin" ]]; then
-            admin_mode=true
-            shift
-        fi
-    fi
-
+    local mode="$1"
+    shift
     local cmd_args=("$@")
 
-    if [[ "$admin_mode" == "true" ]]; then
+    if [[ "$mode" == "admin" ]]; then
         log_success "Starting container for: $PROJECT_NAME (admin shell)"
     else
         log_success "Starting container for: $PROJECT_NAME"
@@ -184,48 +172,87 @@ run_container() {
         mount_opts+=(-v "${HOME}/.gitconfig:/home/${USERNAME}/.gitconfig:ro")
     fi
 
-    # Use Docker named volume for Claude config (like Anthropic's devcontainer)
-    local claude_volume_name="agentbox-claude-${container_name#agentbox-}"
+    if [[ "$mode" == "claude" ]]; then
+      # Use Docker named volume for Claude config
+      local claude_volume_name="agentbox-claude-${container_name#agentbox-}"
 
-    # Check if volume exists and initialize if needed
-    if ! docker volume inspect "$claude_volume_name" &>/dev/null; then
-        log_info "Creating Claude CLI volume and copying authentication from global config"
-        docker volume create "$claude_volume_name" &>/dev/null
+      # Check if volume exists and initialize if needed
+      if ! docker volume inspect "$claude_volume_name" &>/dev/null; then
+          log_info "Creating Claude CLI volume and copying authentication from global config"
+          docker volume create "$claude_volume_name" &>/dev/null
 
-        # Initialize volume with global Claude config if it exists
-        if [[ -d "${HOME}/.claude" ]]; then
-            # Use a temporary container to copy data to the volume
-            docker run --rm \
-                -v "${HOME}/.claude:/source:ro" \
-                -v "${claude_volume_name}:/dest" \
-                "$IMAGE_NAME" \
-                sh -c "cp -r /source/* /dest/ 2>/dev/null || true"
-        fi
+          # Initialize volume with global Claude config if it exists
+          if [[ -d "${HOME}/.claude" ]]; then
+              # Use a temporary container to copy data to the volume
+              docker run --rm \
+                  -v "${HOME}/.claude:/source:ro" \
+                  -v "${claude_volume_name}:/dest" \
+                  "$IMAGE_NAME" \
+                  sh -c "cp -r /source/* /dest/ 2>/dev/null || true"
+          fi
+      fi
+
+      mount_opts+=(-v "${claude_volume_name}:/home/${USERNAME}/.claude")
+
+      # Set Claude config directory environment variable
+      mount_opts+=(--env "CLAUDE_CONFIG_DIR=/home/${USERNAME}/.claude")
+
+      log_info "Claude CLI configuration mounted"
     fi
 
-    mount_opts+=(-v "${claude_volume_name}:/home/${USERNAME}/.claude")
+    if [[ "$mode" == "codex" ]]; then
+      # Use Docker named volume for codex config
+      local codex_volume_name="agentbox-codex-${container_name#agentbox-}"
 
-    # Set Claude config directory environment variable
-    mount_opts+=(--env "CLAUDE_CONFIG_DIR=/home/${USERNAME}/.claude")
+      # Check if volume exists and initialize if needed
+      if ! docker volume inspect "$codex_volume_name" &>/dev/null; then
+          log_info "Creating codex CLI volume and copying authentication from global config"
+          docker volume create "$codex_volume_name" &>/dev/null
 
-    log_info "Claude CLI configuration mounted"
+          # Initialize volume with global codex config if it exists
+          if [[ -d "${HOME}/.codex" ]]; then
+              # Use a temporary container to copy data to the volume
+              docker run --rm \
+                  -v "${HOME}/.codex:/source:ro" \
+                  -v "${codex_volume_name}:/dest" \
+                  "$IMAGE_NAME" \
+                  sh -c "cp -r /source/* /dest/ 2>/dev/null || true"
+          fi
+      fi
+
+      mount_opts+=(-v "${codex_volume_name}:/home/${USERNAME}/.codex")
+
+      # Set codex config directory environment variable
+      mount_opts+=(--env "CODEX_HOME=/home/${USERNAME}/.codex")
+
+      log_info "codex CLI configuration mounted"
+    fi
 
     # Prepare the command to run
     local container_cmd
-    if [[ "$shell_mode" == "true" ]]; then
-        if [[ "$admin_mode" == "true" ]]; then
-            container_cmd=(bash -c "echo '🔒 Admin shell - sudo access enabled' && exec ${cmd_args[*]:-/bin/zsh}")
-        else
-            container_cmd=("${cmd_args[@]:-/bin/zsh}")
-        fi
-    else
-        # Run claude through zsh to get proper environment
-        # Always include --dangerously-skip-permissions, append any additional flags
+    if [[ "$mode" == "shell" ]]; then
+        container_cmd=("${cmd_args[@]:-/bin/zsh}")
+    elif [[ "$mode" == "admin" ]]; then
+        container_cmd=(bash -c "echo '🔒 Admin shell - sudo access enabled' && exec ${cmd_args[*]:-/bin/zsh}")
+    elif [[ "$mode" == "claude" ]]; then
+        # Run through zsh to get proper environment
+        # Always include YOLO, append any additional flags
         local claude_cmd="claude --dangerously-skip-permissions"
         if [[ ${#cmd_args[@]} -gt 0 ]]; then
             claude_cmd="$claude_cmd ${cmd_args[*]}"
         fi
         container_cmd=(zsh -c "source ~/.zshrc && exec $claude_cmd")
+    elif [[ "$mode" == "codex" ]]; then
+        # Run through zsh to get proper environment
+        # Always include YOLO, append any additional flags
+        local codex_cmd="codex --dangerously-bypass-approvals-and-sandbox"
+        if [[ ${#cmd_args[@]} -gt 0 ]]; then
+            codex_cmd="$codex_cmd ${cmd_args[*]}"
+        fi
+        container_cmd=(zsh -c "source ~/.zshrc && exec $codex_cmd")
+    else
+        echo "Internal error - unsupported mode"
+        exit 1
     fi
 
     # Check for .env file in project directory and add to docker args
@@ -260,31 +287,16 @@ show_help() {
 AgentBox - Simplified Docker environment for Claude development
 
 Usage:
-    agentbox [OPTIONS] [COMMAND]
-
-Options:
-    -h, --help      Show this help message
-    --cleanup       Remove AgentBox image
-    --rebuild       Force rebuild of the image
+    agentbox [COMMAND] [ARGS]
 
 Commands:
-    shell [--admin] Start interactive shell instead of Claude CLI
-
-    If no command is provided, Claude CLI will be started automatically.
-    Use 'shell' command to get a shell instead of Claude CLI.
-    Use 'shell --admin' to get a shell with sudo privileges.
-    Other commands will be executed inside the container.
-
-Examples:
-    agentbox                    # Start Claude CLI for current project
-    agentbox shell              # Start interactive shell instead of Claude
-    agentbox shell --admin      # Start admin shell with sudo access
-    agentbox python script.py   # Run Python script in container
-    agentbox --cleanup          # Remove image and optionally cached data
-    agentbox --rebuild          # Force rebuild image
-
-Containers are ephemeral and automatically removed when you exit.
-Package caches and shell history persist between sessions.
+    -h, --help  Show this help message
+    build       Force rebuild of the image
+    clean       Remove AgentBox image
+    shell       Enter a shell
+    admin       Enter a shell with sudo
+    claude      Start a claude session
+    codex       Start a codex session
 EOF
 }
 
@@ -315,51 +327,39 @@ cleanup_all() {
 
 # Main execution
 main() {
-    # Parse arguments
-    local force_rebuild=false
-    local cleanup_all=false
-    local shell_mode=false
-    local admin_mode=false
-    local cmd_args=()
+    if [[ $# -eq 0 ]]; then
+      echo "Need command"
+      show_help
+      exit 1
+    fi
 
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -h|--help)
-                show_help
-                exit 0
-                ;;
-            --cleanup)
-                cleanup_all=true
-                shift
-                ;;
-            --rebuild)
-                force_rebuild=true
-                shift
-                ;;
-            shell)
-                shell_mode=true
-                shift
-                # Check if next arg is --admin
-                if [[ "${1:-}" == "--admin" ]]; then
-                    admin_mode=true
-                    shift
-                fi
-                # Remaining args become shell commands
-                cmd_args=("$@")
-                break
-                ;;
-            *)
-                cmd_args+=("$1")
-                shift
-                ;;
-        esac
-    done
+    local mode="$1"
+    shift
+    local cmd_args=("$@")
+
+    case "$mode" in
+        shell) ;;
+        admin) ;;
+        claude) ;;
+        codex) ;;
+        clean) ;;
+        build) ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown command"
+            show_help
+            exit 1
+            ;;
+    esac
 
     # Check Docker
     check_docker
 
     # Handle special commands
-    if [[ "$cleanup_all" == "true" ]]; then
+    if [[ "$mode" == "clean" ]]; then
         cleanup_all
         exit 0
     fi
@@ -367,10 +367,9 @@ main() {
     # Get container name for current project
     local container_name=$(get_container_name)
 
-
     # Check if rebuild is needed or forced
-    if [[ "$force_rebuild" == "true" ]] || needs_rebuild; then
-        if [[ "$force_rebuild" == "true" ]]; then
+    if [[ "$mode" == "build" ]] || needs_rebuild; then
+        if [[ "$mode" == "build" ]]; then
             log_info "Forcing image rebuild..."
         else
             log_info "Dockerfile or entrypoint changed, rebuilding automatically..."
@@ -381,18 +380,13 @@ main() {
             exit 1
         fi
 
+        if [[ "$mode" == "build" ]]; then
+          exit 0
+        fi
     fi
 
     # Run or attach to container
-    if [[ "$shell_mode" == "true" ]]; then
-        if [[ "$admin_mode" == "true" ]]; then
-            run_container "$container_name" "shell" "--admin" "${cmd_args[@]}"
-        else
-            run_container "$container_name" "shell" "${cmd_args[@]}"
-        fi
-    else
-        run_container "$container_name" "${cmd_args[@]}"
-    fi
+    run_container "$container_name" "$mode" "${cmd_args[@]}"
 }
 
 # Run main function

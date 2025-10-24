@@ -37,7 +37,6 @@ if [ -t 0 ] && [ -t 1 ]; then
     echo "📁 Workspace: /workspace"
     echo "🐍 Python: $(python3 --version 2>&1 | cut -d' ' -f2) (uv available)"
     echo "🟢 Node.js: $(node --version 2>/dev/null || echo 'not found')"
-    echo "🤖 Claude CLI: $(claude --version 2>/dev/null || echo 'not found - check installation')"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 fi

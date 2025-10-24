@@ -1,6 +1,3 @@
-# ClaudeBox reference code - should not be committed to agentbox repo
-claudebox/
-
 # OS files
 .DS_Store
 .DS_Store?
