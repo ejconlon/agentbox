@@ -9,7 +9,7 @@ readonly SCRIPT_DIR="/opt/agentbox"
 readonly PROJECT_DIR="$(pwd)"
 readonly PROJECT_NAME="$(basename "$PROJECT_DIR")"
 readonly DOCKERFILE_PATH="${SCRIPT_DIR}/Dockerfile"
-readonly ENTRYPOINT_PATH="${SCRIPT_DIR}/entrypoint.sh"
+readonly ENTRYPOINT_PATH="${SCRIPT_DIR}/entrypoint"
 readonly IMAGE_NAME="agentbox:latest"
 readonly CONTAINER_PREFIX="agentbox"
 readonly USERNAME="agentbox"
@@ -245,25 +245,25 @@ run_container() {
     # Prepare the command to run
     local container_cmd
     if [[ "$mode" == "shell" ]]; then
-        container_cmd=("${cmd_args[@]:-/bin/zsh}")
+        container_cmd=("${cmd_args[@]:-/bin/bash}")
     elif [[ "$mode" == "admin" ]]; then
-        container_cmd=(bash -c "echo '🔒 Admin shell - sudo access enabled' && exec ${cmd_args[*]:-/bin/zsh}")
+        container_cmd=(bash -c "echo '🔒 Admin shell - sudo access enabled' && exec ${cmd_args[*]:-/bin/bash}")
     elif [[ "$mode" == "claude" ]]; then
-        # Run through zsh to get proper environment
+        # Run through bash to get proper environment
         # Always include YOLO, append any additional flags
         local claude_cmd="claude --dangerously-skip-permissions"
         if [[ ${#cmd_args[@]} -gt 0 ]]; then
             claude_cmd="$claude_cmd ${cmd_args[*]}"
         fi
-        container_cmd=(zsh -c "source ~/.zshrc && exec $claude_cmd")
+        container_cmd=(bash -c "source ~/.bashrc && exec $claude_cmd")
     elif [[ "$mode" == "codex" ]]; then
-        # Run through zsh to get proper environment
+        # Run through bash to get proper environment
         # Always include YOLO, append any additional flags
         local codex_cmd="codex --dangerously-bypass-approvals-and-sandbox"
         if [[ ${#cmd_args[@]} -gt 0 ]]; then
             codex_cmd="$codex_cmd ${cmd_args[*]}"
         fi
-        container_cmd=(zsh -c "source ~/.zshrc && exec $codex_cmd")
+        container_cmd=(bash -c "source ~/.bashrc && exec $codex_cmd")
     else
         echo "Internal error - unsupported mode"
         exit 1
@@ -281,7 +281,6 @@ run_container() {
         --user 1000:1000 \
         --name "$container_name" \
         --hostname "agentbox-$PROJECT_NAME" \
-        --env "USER=${USERNAME}" \
         --env "VIRTUAL_ENV=/workspace/.agentbox/venv" \
         --env "UV_PROJECT_ENVIRONMENT=/workspace/.agentbox/venv" \
         --env "UV_CACHE_DIR=/workspace/.agentbox/cache" \

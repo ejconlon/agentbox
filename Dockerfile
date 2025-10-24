@@ -1,133 +1,125 @@
 # AgentBox - Simplified multi-language development environment for Claude/Codex
-FROM debian:trixie
+FROM rockylinux:9.3
 
-# Prevent interactive prompts during installation
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LANG=en_US.UTF-8
-ENV LANGUAGE=en_US:en
-ENV LC_ALL=en_US.UTF-8
-
-# Install system dependencies and essential tools
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean && \
-    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
+# Install system dependencies, Node.js LTS, GitHub CLI, and set locale
+RUN --mount=type=cache,target=/var/cache/dnf \
+    --mount=type=cache,target=/var/lib/dnf \
+    dnf -y update && \
+    dnf -y install epel-release && \
+    \
+    # Core utilities and build dependencies
+    dnf -y install --allowerasing \
         # Essential tools
-        ca-certificates curl wget gnupg lsb-release sudo \
+        ca-certificates curl wget gnupg2 sudo which \
         # Development tools
         git vim nano tmux htop tree \
         # Build tools
-        build-essential gcc g++ make cmake pkg-config \
-        # Shell and utilities
-        zsh bash-completion locales \
+        make gcc gcc-c++ cmake pkg-config \
+        # Shell and locale utilities
+        bash-completion glibc-langpack-en glibc-locale-source \
         # Network tools
-        openssh-client netcat-openbsd socat dnsutils iputils-ping \
+        openssh-clients nmap-ncat socat bind-utils iputils \
         # Archive tools
-        zip unzip tar gzip bzip2 xz-utils \
-        # JSON/YAML tools
+        zip unzip tar gzip bzip2 xz \
+        # JSON/YAML processors
         jq yq \
         # Process management
-        procps psmisc \
-        # Python build dependencies
-        python3-dev python3-pip python3-venv \
-        libssl-dev libffi-dev \
-        # Custom tools
-        just \
+        procps-ng psmisc \
+        # Python toolchain
+        python3.13 python3.13-pip python3.13-devel \
+        # Cryptography headers
+        openssl-devel libffi-devel \
         # Search tools
-        ripgrep fd-find && \
-    # Setup locale
-    echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
-    locale-gen && \
-    # Cleanup
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+        ripgrep fd-find \
+        # System metadata utilities
+        shadow-utils findutils && \
+    \
+    # Enable Node.js LTS stream (e.g. nodejs:20) and install Node.js + npm
+    dnf module enable -y nodejs:20 && \
+    dnf -y install nodejs && \
+    \
+    # Install GitHub CLI (official repo for RHEL/Rocky/Fedora)
+    dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && \
+    dnf -y install gh && \
+    \
+    # Clean up dnf metadata to keep the image lean
+    dnf clean all
 
-# Install GitHub CLI
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
-    gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
-    chmod 644 /usr/share/keyrings/githubcli-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-    > /etc/apt/sources.list.d/github-cli.list && \
-    apt-get update && \
-    apt-get install -y gh && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Install 'just' from upstream release tarball
+RUN set -eux; \
+    ver="1.43.0"; \
+    arch="$(uname -m)"; \
+    url="https://github.com/casey/just/releases/download/${ver}/just-${ver}-${arch}-unknown-linux-musl.tar.gz"; \
+    curl -L "$url" -o /tmp/just.tar.gz; \
+    tar -xzf /tmp/just.tar.gz -C /tmp; \
+    # the tarball contains a single 'just' binary
+    install -m 0755 /tmp/just /usr/local/bin/just; \
+    rm -f /tmp/just /tmp/just.tar.gz; \
+    just --version
 
-# Create non-root user
-ARG USER_ID=1000
-ARG GROUP_ID=1000
-ARG USERNAME=agentbox
+# Install Claude and Codex globally using system Node.js
+RUN npm install -g @openai/codex @anthropic-ai/claude-code && \
+    mkdir -p .claude .codex && \
+    claude --version && codex --version
 
+# Generate and ensure en_US.UTF-8 locale
+RUN localedef -i en_US -f UTF-8 en_US.UTF-8 && \
+    echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+# Set user vars
+ARG USER_ID=1000 \
+    GROUP_ID=1000 \
+    USERNAME=agentbox
+
+# Create non-root user (bash shell)
 RUN groupadd -g ${GROUP_ID} ${USERNAME} || true && \
-    useradd -m -u ${USER_ID} -g ${GROUP_ID} -s /bin/zsh ${USERNAME} && \
+    useradd -m -u ${USER_ID} -g ${GROUP_ID} -s /bin/bash ${USERNAME} && \
+    mkdir -p /etc/sudoers.d && \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} && \
     chmod 0440 /etc/sudoers.d/${USERNAME}
 
-# Switch to user for language installations
+# Switch to non-root user for home setup
 USER ${USERNAME}
+
+# Work in home directory
 WORKDIR /home/${USERNAME}
 
-# Install uv for Python package management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && \
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-
-# Install Node.js via NVM
-ENV NVM_DIR="/home/${USERNAME}/.nvm"
-RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && \
-    . "$NVM_DIR/nvm.sh" && \
-    nvm install --lts && \
-    nvm alias default node && \
-    nvm use default
-
-# Install claude and codex
-RUN bash -c "source $NVM_DIR/nvm.sh && \
-    npm install -g @openai/codex @anthropic-ai/claude-code && \
-    which claude && which codex && \
-    mkdir /home/${USERNAME}/.claude && \
-    mkdir /home/${USERNAME}/.codex && \
-    echo force-1"
-
-# Setup NVM in bash
-RUN echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc && \
-    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.bashrc
-
-# Setup NVM in zsh
-RUN echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.zshrc && \
-    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.zshrc
-
-# Add terminal size handling for better TTY support (from ClaudeBox)
-RUN cat >> ~/.zshrc <<'EOF'
+# Create workspace directory, add local bin to path, and
+# add terminal resize logic to bash for better interactive behavior
+RUN mkdir -p .local/bin && \
+    rm .bashrc && touch .bashrc && \
+    echo 'export LANG=en_US.UTF-8' >> .bashrc && \
+    echo 'export LANGUAGE=en_US:en' >> .bashrc && \
+    echo "export PATH=\"/home/${USERNAME}/.local/bin:\${PATH}\"" >> .bashrc && \
+    echo 'alias python=/usr/bin/python3.13' >> .bashrc && \
+    echo 'alias python3=/usr/bin/python3.13' >> .bashrc && \
+    echo 'alias pip=/usr/bin/pip3.13' >> .bashrc && \
+    cat >> .bashrc <<'EOF'
 
 if [[ -n "$PS1" ]] && command -v stty >/dev/null; then
-  function _update_size {
+  _update_size() {
     local rows cols
-    { stty size } 2>/dev/null | read rows cols
+    { stty size; } 2>/dev/null | read rows cols
     ((rows)) && export LINES=$rows COLUMNS=$cols
   }
-  TRAPWINCH() { _update_size }
+  trap _update_size WINCH
   _update_size
 fi
 EOF
 
-# Create workspace directory
-RUN mkdir -p /home/${USERNAME}/workspace
+# Install pipx (user scope) and then uv via pipx
+RUN /usr/bin/python3.13 -m pip install --user --upgrade pip pipx && \
+    .local/bin/pipx install uv
 
 # Switch back to root for entrypoint setup
 USER root
-
-# Copy entrypoint script
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-# Set working directory
-WORKDIR /workspace
-
-# Set the user for runtime
+COPY entrypoint /usr/local/bin/entrypoint
+RUN chmod +x /usr/local/bin/entrypoint
 USER ${USERNAME}
 
-# Entrypoint
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["/bin/zsh"]
+# Default workdir to workspace
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/entrypoint"]
+CMD ["/bin/bash"]
+

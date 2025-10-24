@@ -1,0 +1,18 @@
+#!/bin/bash
+# AgentBox entrypoint script - minimal initialization
+
+set -e
+
+# Pickup paths
+source $HOME/.bashrc
+
+# Create Python virtual environment if it doesn't exist in the project
+if [ ! -d "${VIRTUAL_ENV}" ] && [ -f "/workspace/requirements.txt" -o -f "/workspace/pyproject.toml" -o -f "/workspace/setup.py" ]; then
+    pushd /workspace
+      mkdir -p $(dirname ${VIRTUAL_ENV})
+      uv sync --all-packages
+    popd
+fi
+
+# Execute the command passed to docker run
+exec "$@"
