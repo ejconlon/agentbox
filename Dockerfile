@@ -87,7 +87,8 @@ RUN bash -c "source $NVM_DIR/nvm.sh && \
     npm install -g @openai/codex @anthropic-ai/claude-code && \
     which claude && which codex && \
     mkdir /home/${USERNAME}/.claude && \
-    mkdir /home/${USERNAME}/.codex"
+    mkdir /home/${USERNAME}/.codex && \
+    echo force-1"
 
 # Setup NVM in bash
 RUN echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc && \
